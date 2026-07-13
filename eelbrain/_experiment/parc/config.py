@@ -1,18 +1,49 @@
-from copy import deepcopy
+# Author: Christian Brodbeck <christianbrodbeck@nyu.edu>
+"""Parcellation configurations.
+
+Each parcellation type is a :class:`Parcellation` (a
+:class:`~configuration.Configuration`) subclass that the user attaches to
+:class:`~pipeline.Pipeline` by name. The graph node that builds or loads the
+corresponding ``*.annot`` files lives in :mod:`._experiment.parc.nodes`.
+"""
+
+from __future__ import annotations
+
 import os
 import re
+from typing import TYPE_CHECKING
 from collections.abc import Sequence
 
 import mne
 
-from .._mne import combination_label, labels_from_mni_coords, rename_label, dissolve_label
-from .definitions import DefinitionError, Definition, sequence_arg
+from ..._mne import combination_label, labels_from_mni_coords, rename_label, dissolve_label
+from ..pathing import MRI_SDIR, mri_dir
+from ..configuration import Configuration, ConfigurationError, sequence_arg
+
+if TYPE_CHECKING:
+    from ..derivative_cache import Request
+    from .nodes import AnnotDerivative
 
 
 SEEDED_PARC_RE = re.compile(r'^(.+)-(\d+)$')
 
 
-class Parcellation(Definition):
+def _resolve_parc(parcs: dict[str, Parcellation], parc: str) -> tuple[str, Parcellation | None]:
+    if parc == '':
+        return '', None
+    if parc in parcs:
+        return parc, parcs[parc]
+    match = SEEDED_PARC_RE.match(parc)
+    if match is None:
+        raise ValueError(f"{parc=}: unknown parcellation")
+    name = match.group(1)
+    resolved = parcs.get(name)
+    if not isinstance(resolved, SeededParc):
+        raise ValueError(f"{parc=}: unknown parcellation")
+    return parc, resolved
+
+
+class Parcellation(Configuration):
     DICT_ATTRS = ('kind',)
     kind = None  # used when comparing dict representations
     morph_from_fsaverage = False
@@ -23,14 +54,10 @@ class Parcellation(Definition):
     ):
         self.views = views
 
-    def _link(self, name):
-        out = deepcopy(self)
-        out.name = name
-        return out
-
     def _make(
             self,
-            e,  # the Pipeline instance
+            ctx: Request,
+            annot: AnnotDerivative,
             parc: str,  # the name (contains radius for seeded parcellations)
     ) -> list:
         raise RuntimeError(f"Trying to make {self.__class__.__name__}")
@@ -92,9 +119,8 @@ class SubParc(Parcellation):
         self.base = base
         self.labels = sequence_arg('labels', labels)
 
-    def _make(self, e, parc):
-        with e._temporary_state:
-            base = {l.name: l for l in e.load_annot(parc=self.base)}
+    def _make(self, ctx: Request, annot: AnnotDerivative, parc: str):
+        base = {l.name: l for l in ctx.load('base')}
         hemis = ('-lh', '-rh')
         labels = []
         for label in self.labels:
@@ -181,10 +207,9 @@ class CombinationParc(Parcellation):
         self.base = base
         self.labels = labels
 
-    def _make(self, e, parc):
-        with e._temporary_state:
-            base = {l.name: l for l in e.load_annot(parc=self.base)}
-        subjects_dir = e.get('mri-sdir')
+    def _make(self, ctx: Request, annot: AnnotDerivative, parc: str):
+        base = {l.name: l for l in ctx.load('base')}
+        subjects_dir = ctx.root / MRI_SDIR
         labels = []
         for name, exp in self.labels.items():
             labels += combination_label(name, exp, base, subjects_dir)
@@ -202,6 +227,7 @@ class CombinationParc(Parcellation):
 class EelbrainParc(Parcellation):
     "Parcellation that has special make rule"
     kind = 'eelbrain_parc'
+    base = 'PALS_B12_Lobes'
 
     def __init__(
             self,
@@ -211,16 +237,15 @@ class EelbrainParc(Parcellation):
         Parcellation.__init__(self, views)
         self.morph_from_fsaverage = morph_from_fsaverage
 
-    def _make(self, e, parc):
+    def _make(self, ctx: Request, annot: AnnotDerivative, parc: str):
         assert parc == 'lobes'
-        subject = e.get('mrisubject')
-        subjects_dir = e.get('mri-sdir')
+        subject = ctx.state['mrisubject']
+        subjects_dir = ctx.root / MRI_SDIR
         if subject != 'fsaverage':
             raise RuntimeError(f"lobes parcellation can only be created for fsaverage, not for {subject}")
 
         # load source annot
-        with e._temporary_state:
-            labels = e.load_annot(parc='PALS_B12_Lobes')
+        labels = ctx.load('base')
 
         # sort labels
         labels = [l for l in labels if l.name[:-3] != 'MEDIAL.WALL']
@@ -265,8 +290,8 @@ class FreeSurferParc(Parcellation):
     """
     kind = 'subject_parc'
 
-    def _make(self, e, parc):
-        subject = e.get('mrisubject')
+    def _make(self, ctx: Request, annot: AnnotDerivative, parc: str):
+        subject = ctx.state['mrisubject']
         raise FileNotFoundError(f"At least one annot file for the parcellation {parc} is missing for {subject}")
 
 
@@ -292,9 +317,9 @@ class FSAverageParc(Parcellation):
     kind = 'fsaverage_parc'
     morph_from_fsaverage = True
 
-    def _make(self, e, parc):
-        common_brain = e.get('common_brain')
-        assert e.get('mrisubject') == common_brain
+    def _make(self, ctx: Request, annot: AnnotDerivative, parc: str):
+        common_brain = ctx.state['common_brain']
+        assert ctx.state['mrisubject'] == common_brain
         raise FileNotFoundError(f"At least one annot file for the parcellation {parc} is missing for {common_brain}")
 
 
@@ -316,10 +341,10 @@ class LabelParc(Parcellation):
         Parcellation.__init__(self, views)
         self.labels = sequence_arg('labels', labels)
 
-    def _make(self, e, parc):
+    def _make(self, ctx: Request, annot: AnnotDerivative, parc: str):
         labels = []
         hemis = ('lh.', 'rh.')
-        path = os.path.join(e.get('mri-dir'), 'label', '%s.label')
+        path = os.path.join(ctx.root / mri_dir(ctx.state), 'label', '%s.label')
         for label in self.labels:
             if label.startswith(hemis):
                 labels.append(mne.read_label(path % label))
@@ -380,16 +405,15 @@ class SeededParc(Parcellation):
         self.mask = mask
         self.surface = surface
 
-    def seeds_for_subject(self, subject):
+    def _seeds_for_subject(self, subject):
         return self.seeds
 
-    def _make(self, e, parc):
+    def _make(self, ctx: Request, annot: AnnotDerivative, parc: str):
         if self.mask:
-            with e._temporary_state:
-                e.make_annot(parc=self.mask)
-        subject = e.get('mrisubject')
-        subjects_dir = e.get('mri-sdir')
-        seeds = self.seeds_for_subject(subject)
+            ctx.load('mask')
+        subject = ctx.state['mrisubject']
+        subjects_dir = ctx.root / MRI_SDIR
+        seeds = self._seeds_for_subject(subject)
         name, extent = SEEDED_PARC_RE.match(parc).groups()
         return labels_from_mni_coords(seeds, float(extent), subject, self.surface, self.mask, subjects_dir, parc)
 
@@ -430,12 +454,12 @@ class IndividualSeededParc(SeededParc):
         label_subjects = {label: sorted(self.seeds[label].keys()) for label in labels}
         subjects = label_subjects[labels[0]]
         if not all(label_subjects[label] == subjects for label in labels[1:]):
-            raise DefinitionError("Some labels are missing subjects")
+            raise ConfigurationError("Some labels are missing subjects")
         self.subjects = subjects
 
-    def seeds_for_subject(self, subject):
+    def _seeds_for_subject(self, subject):
         if subject not in self.subjects:
-            raise DefinitionError(f"Parcellation {self.name} not defined for subject {subject}")
+            raise ConfigurationError(f"Parcellation {self.name} not defined for subject {subject}")
         seeds = {name: self.seeds[name][subject] for name in self.seeds}
         # filter out missing
         return {name: seed for name, seed in seeds.items() if seed}
@@ -444,34 +468,3 @@ class IndividualSeededParc(SeededParc):
 class VolumeParc(Parcellation):
     "Assume it exists"
     kind = 'volume'
-
-
-def parc_from_dict(name, params):
-    p = params.copy()
-    kind = p.pop('kind', None)
-    if kind is None:
-        raise KeyError(f"Parcellation {name} does not contain the required 'kind' entry")
-    elif kind not in PARC_CLASSES:
-        raise ValueError(f"Parcellation {name} contains an invalid 'kind' entry: {kind!r}")
-    cls = PARC_CLASSES[kind]
-    return cls(**p)
-
-
-PARC_CLASSES = {p.kind: p for p in (CombinationParc, FreeSurferParc, FSAverageParc, SeededParc, IndividualSeededParc)}
-
-
-def assemble_parcs(items):
-    parcs = {}
-    for name, obj in items:
-        if isinstance(obj, Parcellation):
-            parc = obj
-        elif isinstance(obj, dict):
-            parc = parc_from_dict(name, obj)
-        elif obj == FreeSurferParc.kind:
-            parc = FreeSurferParc(('lateral', 'medial'))
-        elif obj == FSAverageParc.kind:
-            parc = FSAverageParc(('lateral', 'medial'))
-        else:
-            raise DefinitionError(f"parcellation {name!r}: {obj!r}")
-        parcs[name] = parc._link(name)
-    return parcs

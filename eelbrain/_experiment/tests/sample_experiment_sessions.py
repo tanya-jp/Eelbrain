@@ -31,13 +31,17 @@ class SampleExperiment(Pipeline):
     }
 
     variables = {
-        'event': {(1, 2, 3, 4): 'target', 5: 'smiley', 32: 'button'},
-        'side': {(1, 3): 'left', (2, 4): 'right'},
-        'modality': {(1, 2): 'auditory', (3, 4): 'visual'}
+        'event': LabelVar('value', {(1, 2, 3, 4): 'target', 5: 'smiley', 32: 'button'}),
+        'side': LabelVar('value', {(1, 3): 'left', (2, 4): 'right'}),
+        'modality': LabelVar('value', {(1, 2): 'auditory', (3, 4): 'visual'}),
     }
 
     epochs = {
         'target1': PrimaryEpoch('sample1', "event == 'target'", decim=5),
         'target2': PrimaryEpoch('sample2', "event == 'target'", decim=5),
         'super': SuperEpoch(('target1', 'target2')),
+    }
+
+    epoch_rejection = {
+        'manual': ManualRejection(),
     }

@@ -6481,6 +6481,7 @@ class Dataset(dict):
             df,
             random: str | Collection[str] = None,
             skip: str | Collection[str] = None,
+            info: dict = None,
     ) -> Dataset:
         """Create a dataset from a :class:`pandas.DataFrame`
 
@@ -6530,7 +6531,7 @@ class Dataset(dict):
                 item.random = True
             else:
                 raise ValueError(f"{random=}: {key!r} is not a Factor but {item}")
-        return cls(items)
+        return cls(items, info=info)
 
     @classmethod
     def from_r(cls, name) -> Dataset:
@@ -6772,17 +6773,19 @@ class Dataset(dict):
         "Table with the first n cases in the Dataset"
         return self._display_table(n, title)
 
-    def index(self, name='index', start=0):
+    def index(self, name: str = 'index', start: int = 0):
         """Add an index to the Dataset (i.e., ``range(n_cases)``)
 
         Parameters
         ----------
-        name : str
+        name
             Name of the new index variable.
-        start : int
+        start
             Number at which to start the index.
         """
-        if not isinstance(name, str):
+        if name is True:
+            name = 'index'
+        elif not isinstance(name, str):
             raise TypeError(f"{name=}")
         self[name] = Var(np.arange(start, self.n_cases + start))
 
@@ -9956,7 +9959,7 @@ class SourceSpaceBase(Dimension):
             subjects_dir: PathArg,
             subject: str,
             src: str,
-            parc: str = None,
+            parc: str | None = None,
             label: mne.Label = None,
             source_spaces: mne.SourceSpaces = None,  # speeds up initialization
     ):
@@ -9972,7 +9975,7 @@ class SourceSpaceBase(Dimension):
             source_spaces: mne.SourceSpaces,
             src: str,
             subjects_dir: PathArg,
-            parc: str = None,
+            parc: str | None = None,
             label: mne.Label = None,
     ):
         """SourceSpace dimension from :class:`mne.SourceSpaces` object
@@ -9991,7 +9994,7 @@ class SourceSpaceBase(Dimension):
             subjects_dir: PathArg,
             subject: str,
             src: str,
-            parc: str = None,
+            parc: str | None = None,
             label: mne.Label = None,
             source_spaces: mne.SourceSpaces = None,  # speeds up initialization
             **kwargs,
@@ -10787,7 +10790,7 @@ class VolumeSourceSpace(SourceSpaceBase):
             subject: str = None,
             src: str = None,
             subjects_dir: PathArg = None,
-            parc: str = None,
+            parc: str | None = None,
             adjacency: AdjacencyArg = 'custom',
             name: str = 'source',
             filename: str = '{subject}-{src}-src.fif',

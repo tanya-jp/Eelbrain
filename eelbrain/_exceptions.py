@@ -16,8 +16,27 @@ class KeysMissing(KeyError):
         return f"{plural('Key', n)} {enumeration(map(repr, keys))} missing from {from_name}={from_dict!r}"
 
 
-class DefinitionError(Exception):
-    "Pipeline definition error"
+class DataError(Exception):
+    "Problem with the Pipeline input data (e.g. missing channel positions)"
+
+
+class ConfigurationError(Exception):
+    "Pipeline configuration error"
+
+
+class ConfigurationKeyError(ConfigurationError, KeyError):
+    "A ConfigurationDict is missing a requested key (more information than KeyError)"
+
+    def __init__(self, key, kind: str, defined: Collection):
+        KeyError.__init__(self, key, kind, tuple(sorted(defined)))
+
+    def __str__(self):
+        key, kind, defined = self.args
+        if defined:
+            tail = f"defined {plural(kind, len(defined))}: {enumeration(map(repr, defined))}"
+        else:
+            tail = f"no {plural(kind, 2)} defined"
+        return f"{kind} {key!r} not defined; {tail}"
 
 
 class EvalError(Exception):

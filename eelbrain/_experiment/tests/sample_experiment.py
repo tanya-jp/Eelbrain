@@ -26,13 +26,12 @@ class SampleExperiment(Pipeline):
 
     defaults = {
         'epoch': 'target',
-        'select_clusters': 'all',
     }
 
     variables = {
-        'event': {(1, 2, 3, 4): 'target', 5: 'smiley', 32: 'button'},
-        'side': {(1, 3): 'left', (2, 4): 'right'},
-        'modality': {(1, 2): 'auditory', (3, 4): 'visual'}
+        'event': LabelVar('value', {(1, 2, 3, 4): 'target', 5: 'smiley', 32: 'button'}),
+        'side': LabelVar('value', {(1, 3): 'left', (2, 4): 'right'}),
+        'modality': LabelVar('value', {(1, 2): 'auditory', (3, 4): 'visual'}),
     }
 
     raw = {
@@ -55,6 +54,10 @@ class SampleExperiment(Pipeline):
         'cov': SecondaryEpoch('target', tmax=0),
     }
 
+    epoch_rejection = {
+        'manual': ManualRejection(),
+    }
+
     tests = {
         # T-test to compare left-sided vs right-sided stimulation
         'left=right': TTestRelated('side', 'left', 'right'),
@@ -64,12 +67,27 @@ class SampleExperiment(Pipeline):
         'twostage': TwoStageTest(
             stage_1='side_left + modality_a',
             model='side % modality',
-            vars={'side_left': "side == 'left'",
-                  'modality_a': "modality == 'auditory'"}),
+            vars={'side_left': EvalVar("side == 'left'"),
+                  'modality_a': EvalVar("modality == 'auditory'")}),
     }
 
     parcs = {
         'ac': SubParc('aparc', ('transversetemporal',)),
+    }
+
+
+class SampleTRF(SampleExperiment):
+    "SampleExperiment with TRF predictors, for testing load_trf"
+
+    predictors = {
+        'imp': EventPredictor(),
+        'env': UTSPredictor(),
+        'word': NUTSPredictor(),
+    }
+    # the 'modality' event variable ('auditory'/'visual') identifies the stimulus
+    stim_var = 'modality'
+    estimators = {
+        'boosting': Boosting(partitions=5),
     }
 
 
